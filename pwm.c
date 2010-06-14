@@ -29,7 +29,7 @@ ISR(TIMER0_OVF_vect)
 	pp = &(p[pdi][0]);
 
 	rotc++;
-	if(rotc > 32) {
+	if(rotc > 64) {
 		rotc = 0;
 		rot++;
 		initpwm(p, rot);
@@ -38,8 +38,10 @@ ISR(TIMER0_OVF_vect)
 	OCR0A = 1;
 	TCNT0 = 0;
 
-	// only if the first one is width = 0
-	// PORTB = pp->pin;
+	// just make the pwm logic a regular fn called from the isr...
+	if(pp->width == 0) {
+		PORTB = pp->pin;
+	}
 
     PORTD = pd[pdi];
 }
@@ -50,8 +52,8 @@ int main(void) {
 
 	initpwm(p, 0);
 
-    // TCCR0B = _BV(CS01)|_BV(CS00);
-	TCCR0B = _BV(CS02);
+    TCCR0B = _BV(CS01)|_BV(CS00); // ck / 64
+	// TCCR0B = _BV(CS02); // ck / 256
 	OCR0A = 0;
 	TIMSK = _BV(TOIE0) | _BV(OCIE0A);
 

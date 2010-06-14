@@ -3,3 +3,4 @@ syntax: glob
 Debug/*
 Release/*
 a.out
+*.swp
