@@ -24,45 +24,49 @@ ISR(TIMER0_COMPA_vect)
 
 ISR(TIMER0_OVF_vect)
 {
-	PORTD = 0;
-	pdi = (pdi + 1) % 4;
-	pp = &(p[pdi][0]);
+    PORTD = 0;
+    pdi = (pdi + 1) % 4;
+    pp = &(p[pdi][0]);
 
-	rotc++;
-	if(rotc > 64) {
-		rotc = 0;
-		rot++;
-		initpwm(p, rot);
-	}
+    rotc++;
+    if(rotc > 64) {
+        rotc = 0;
+        rot++;
+        initpwm(p, rot);
+    }
 
-	OCR0A = 1;
-	TCNT0 = 0;
+    OCR0A = 1;
+    TCNT0 = 0;
+    // XXX reset prescaler
 
-	// just make the pwm logic a regular fn called from the isr...
-	if(pp->width == 0) {
-		PORTB = pp->pin;
-	}
+    // just make the pwm logic a regular fn called from the isr...
+    if(pp->width == 0) {
+        PORTB = pp->pin;
+    } else {
+        PORTB = 0;
+    }      
 
     PORTD = pd[pdi];
 }
 
 int main(void) {
-	DDRB = 0xff;
-	DDRD = _BV(5)|_BV(4)|_BV(3)|_BV(2);
+    DDRB = 0xff;
+    DDRD = _BV(5)|_BV(4)|_BV(3)|_BV(2);
 
-	initpwm(p, 0);
+    initpwm(p, 0);
 
     TCCR0B = _BV(CS01)|_BV(CS00); // ck / 64
-	// TCCR0B = _BV(CS02); // ck / 256
-	OCR0A = 0;
-	TIMSK = _BV(TOIE0) | _BV(OCIE0A);
+    // TCCR0B = _BV(CS02); // ck / 256
+    OCR0A = 0;
+    TIMSK = _BV(TOIE0) | _BV(OCIE0A);
 
-	sei();
+    sei();
 
-	set_sleep_mode(SLEEP_MODE_IDLE);
-	sleep_enable();
-	while(1) {
-		sleep_cpu();
-	}
-	return 0;
+    set_sleep_mode(SLEEP_MODE_IDLE);
+    sleep_enable();
+    while(1) {
+        sleep_cpu();
+    }
+    return 0;
 }
+
