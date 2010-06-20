@@ -32,7 +32,7 @@ ISR(TIMER0_OVF_vect)
     if(rotc > 64) {
         rotc = 0;
         rot++;
-        initpwm(p, rot);
+        pwm_init(p, rot);
     }
 
     OCR0A = 1;
@@ -44,7 +44,7 @@ ISR(TIMER0_OVF_vect)
         PORTB = pp->pin;
     } else {
         PORTB = 0;
-    }      
+    }
 
     PORTD = pd[pdi];
 }
@@ -53,12 +53,12 @@ int main(void) {
     DDRB = 0xff;
     DDRD = _BV(5)|_BV(4)|_BV(3)|_BV(2);
 
-    initpwm(p, 0);
+    pwm_init(p, 0);
 
     TCCR0B = _BV(CS01)|_BV(CS00); // ck / 64
     // TCCR0B = _BV(CS02); // ck / 256
     OCR0A = 0;
-    TIMSK = _BV(TOIE0) | _BV(OCIE0A);
+    TIMSK = _BV(TOIE0) | _BV(OCIE0A); // enable overflow and compare interrupts
 
     sei();
 

@@ -8,8 +8,8 @@ typedef struct {
 	uint8_t pin;
 } pwm;
 
-void insertionSort(pwm p[], uint8_t len);
-
-void initpwm(pwm p[4][9], uint8_t rot);
+void pwm_sort(pwm p[], uint8_t len);
+void pwm_merge(pwm p[], uint8_t len);
+void pwm_init(pwm p[4][9], uint8_t rot);
 
 #endif

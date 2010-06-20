@@ -2,7 +2,10 @@
 
 #include "algo.h"
 
-void insertionSort(pwm p[], uint8_t len) {
+/**
+ * Sort p[] by width.
+ */
+void pwm_sort(pwm p[], uint8_t len) {
 	int8_t i;
 	int8_t j;
 	pwm v;
@@ -17,7 +20,26 @@ void insertionSort(pwm p[], uint8_t len) {
 	}
 }
 
-void initpwm(pwm p[4][9], uint8_t rot)
+/**
+ * Merge pins with the same width into the same pwm[] element.
+ */
+void pwm_merge(pwm p[], uint8_t len) {
+    uint8_t i=0;
+    uint8_t j=0;
+    while(j < len) {
+        while(j+1 < len && p[i].width == p[j+1].width) {
+            j++;
+            p[i].width |= p[j].width;
+        }
+        if(i!=j) {
+            p[i] = p[j];
+        }
+        i++;
+        j++;
+    }
+}
+
+void pwm_init(pwm p[4][9], uint8_t rot)
 {
     uint8_t i, j, pin;
     for(i = 0; i < 4; i++){
@@ -32,7 +54,7 @@ void initpwm(pwm p[4][9], uint8_t rot)
         p[i][8].width = 0xff;
         p[i][8].pin = 0;
 
-        insertionSort(p[i], 8);
+        pwm_sort(p[i], 8);
 
         pin = 0;
         for(j = 0; j < 9; j++) {
