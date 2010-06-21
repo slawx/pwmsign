@@ -67,7 +67,7 @@ void pwm_init(uint8_t bitmap[4][8], uint8_t rot) {
     uint8_t i, j;
     for (i = 0; i < 4; i++) {
         for (j = 0; j < 8; j++) {
-            bitmap[i][j] = 1 << ((j + rot) % 8);
+            bitmap[i][j] = (1 << ((j + rot) % 8));
         }
     }
 }
