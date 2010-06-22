@@ -1,12 +1,24 @@
 /**
- * LED lightbox firmware.
+ * Dimmable LED sign firmware.
+ * Copyright 2010 Daniel Holth <dholth@fastmail.fm>
  *
- * Daniel Holth <dholth@fastmail.fm>
- * June 2010
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <ctype.h>
 
 #include <avr/interrupt.h>
 #include <avr/io.h>
@@ -37,6 +49,7 @@ uint8_t rotc;
 volatile struct {
     uint8_t sort :1; // need to refresh inactive buffer
     uint8_t synch :1; // synch event
+    uint8_t rxc :1; // received a character
 } intflags;
 
 ISR(TIMER0_COMPA_vect)
@@ -71,23 +84,20 @@ ISR(TIMER0_OVF_vect)
     intflags.sort = 1;
 }
 
-/**
- * Setup UART.
+/* USART routines are under the following license:
+ * ----------------------------------------------------------------------------
+ * "THE BEER-WARE LICENSE" (Revision 42):
+ * <joerg@FreeBSD.ORG> wrote this file.  As long as you retain this notice you
+ * can do whatever you want with this stuff. If we meet some day, and you think
+ * this stuff is worth it, you can buy me a beer in return.        Joerg Wunsch
+ * ----------------------------------------------------------------------------
+ *
+ * More advanced AVR demonstration.  Controls a LED attached to OCR1A.
+ * The brightness of the LED is controlled with the PWM.  A number of
+ * methods are implemented to control that PWM.
+ *
+ * $Id: largedemo.c,v 1.3 2007/01/19 22:17:10 joerg_wunsch Exp $
  */
-static void uart_38400(void) {
-#undef BAUD  // avoid compiler warning
-#define BAUD 38400
-#include <util/setbaud.h>
-    UBRRH = UBRRH_VALUE;
-    UBRRL = UBRRL_VALUE;
-#if USE_2X
-    UCSRA |= (1 << U2X);
-#else
-    UCSRA &= ~(1 << U2X);
-#endif
-    // Enable TX, RX
-    UCSRB = (1 << TXEN) | (1 << RXEN);
-}
 
 /*
  * Send character c down the UART Tx, wait until tx holding register
@@ -102,7 +112,6 @@ static void putchr(char c) {
  * Send a C (NUL-terminated) string down the UART Tx.
  */
 static void printstr(const char *s) {
-
     while (*s) {
         if (*s == '\n')
             putchr('\r');
@@ -124,29 +133,78 @@ static void printstr_p(const char *s) {
     }
 }
 
-// SYNCHRONIZATION
-uint8_t ici_i;
-uint16_t ici[2];
-ISR(TIMER1_CAPT_vect)
+ISR(USART_RX_vect)
 {
-    if (!intflags.synch) {
-        ici[ici_i] = ICR1L | (ICR1H << 8);
-        ici_i++;
-        ici_i %= 2;
-
-        if(TCCR1B & (1<<ICES1)) {
-            TCCR1B &= ~(1 << ICES1);
-        } else {
-            TCCR1B |= 1<<ICES1;
-        }
-
-        if (ici_i == 0) {
-            intflags.synch = 1;
-        }
-    }
+    intflags.rxc = 1;
 }
 
+/**
+ * Setup UART.
+ */
+static void uart_38400(void) {
+#undef BAUD  // avoid compiler warning
+#define BAUD 38400
+#include <util/setbaud.h>
+    UBRRH = UBRRH_VALUE;
+    UBRRL = UBRRL_VALUE;
+#if USE_2X
+    UCSRA |= (1 << U2X);
+#else
+    UCSRA &= ~(1 << U2X);
+#endif
+    // Enable TX, RX
+    UCSRB = (1 << TXEN) | (1 << RXEN);
+}
 
+// SYNCHRONIZATION.
+#define SYNCH_TARGET ((UBRR_VALUE + 1) * (16 >> USE_2X))
+#define TOO_HIGH (SYNCH_TARGET + (SYNCH_TARGET >> 2))
+#define TOO_LOW (SYNCH_TARGET - (SYNCH_TARGET >> 2))
+#define OSCCAL_MAX (0x7f)
+#define MAX(a, b) (a > b ? a : b)
+#define MIN(a, b) (a < b ? a : b)
+
+uint8_t ici_i;
+uint16_t ici[2];
+/**
+ * Synchronize a relatively accurate OSCCAL to the USART.
+ * (jumper the RXD & ICP pins).
+ * No smart searching, just increase or decrease OSCCAL when a pulse
+ * is reasonably close to the right length.
+ */
+ISR(TIMER1_CAPT_vect)
+{
+    ici[ici_i] = ICR1L | (ICR1H << 8);
+    ici_i++;
+    ici_i %= 2;
+
+    if (TCCR1B & (1 << ICES1)) {
+        TCCR1B &= ~(1 << ICES1);
+    } else {
+        TCCR1B |= 1 << ICES1;
+    }
+
+    if (ici_i == 0) {
+        uint16_t delta = ici[(ici_i + 1) % 2] - ici[ici_i];
+        if (delta > SYNCH_TARGET && delta < TOO_HIGH) {
+            // too fast. decrease osccal.
+            OSCCAL = MAX(OSCCAL-1, 0);
+        } else if (delta < SYNCH_TARGET && delta > TOO_LOW) {
+            // too slow. increase osccal.
+            OSCCAL = MIN(OSCCAL+1, OSCCAL_MAX);
+        } else if (delta <= TOO_LOW || delta >= TOO_HIGH) {
+            // out of bounds
+        } else {
+            // perfect! disable input compare interrupt.
+            TIMSK &= ~(1 << ICIE1);
+        }
+    }
+    intflags.synch = 1;
+}
+
+/**
+ * Set up the event capture unit for OSCCAL calibration.
+ */
 static void synch_init() {
     // set ICP pin as input, no internal pullup.
     DDRD &= ~(1 << PD6); // ICP
@@ -157,58 +215,62 @@ static void synch_init() {
     TCCR1B &= ~(1 << ICES1);
     TIMSK |= 1 << ICIE1;
 }
+
 // END SYNCHRONIZATION
 
 int main(void) {
-    uint8_t ticks = 0;
+    // uint8_t ticks = 0;
     uint8_t i, j;
 
-    char buffer[8];
+    char c;
+    int8_t bxi = -1;
+    char buffer[ROWS];
 
-    for (i = 0; i < 4; i++) {
-        for (j = 0; j < 8; j++) {
-            bitmap[i][j] = 1;
-        }
-    }
+    OSCCAL = 101;
 
-    // debug the uart speed...
     uart_38400();
-    printstr_p(PSTR("Welcome to the LED sign.\n"));
-    OSCCAL = 101; // determined experimentally, was 100 from factory.
 
-    printstr_p(PSTR("OSCCAL: "));
-    itoa(OSCCAL, buffer, 10);
-    printstr(buffer);
-    putchr('\r');
-    putchr('\n');
-    printstr_p(PSTR("UBRR: "));
-    itoa(UBRR_VALUE, buffer, 10);
-    printstr(buffer);
-    putchr('\r');
-    putchr('\n');
-    /*
-    synch_init();
+    // UCSRB |= (1 << RXCIE); // enable rx interrupt. causes glitches.
+
+    printstr_p(PSTR("\nWelcome to the LED sign.\nTo update, type the letter 'u' followed by 32 bytes and a newline.\n"));
+
     sei();
-    while (1) {
-        if (intflags.synch) {
-            uint16_t delta = ici[(ici_i + 1) % 2] - ici[ici_i];
-            itoa(delta, buffer, 10);
-            printstr(buffer);
-            putchr('\r');
-            putchr('\n');
-            intflags.synch = 0;
-        }
-    }
-    */
 
+    // synch_init();
+
+    /*
+     while (TCCR1B & (1<<ICIE1)) {
+     if (intflags.rxc) {
+     if (bit_is_set(UCSRA, RXC)) {
+     while (bit_is_set(UCSRA, RXC)) {
+     putchr(UDR);
+     }
+     putchr('\r');
+     putchr('\n');
+     }
+     intflags.rxc = 0;
+     }
+     if (intflags.synch) {
+     uint16_t delta = ici[(ici_i + 1) % 2] - ici[ici_i];
+     // PORTB = OSCCAL;
+     itoa(delta, buffer, 10);
+     printstr(buffer);
+     putchr(' ');
+     itoa(OSCCAL, buffer, 10);
+     printstr(buffer);
+     putchr(' ');
+     itoa(SYNCH_TARGET, buffer, 10);
+     printstr(buffer);
+     putchr('\r');
+     putchr('\n');
+     intflags.synch = 0;
+     }
+     }
+     */
+
+    ROW_PORT = 0;
     ROW_DDR = 0xff;
     COLUMN_DDR = _BV(5) | _BV(4) | _BV(3) | _BV(2);
-
-    /*
-     pwm_init(bitmap, 0);
-     pwm_copy(p[0], bitmap[0], ROWS);
-     pwm_copy(p[1], bitmap[1], ROWS);
-     */
 
     TCCR0B = _BV(CS01) | _BV(CS00); // ck / 64
     // TCCR0B = _BV(CS02); // ck / 256
@@ -220,23 +282,32 @@ int main(void) {
     while (1) {
         if (intflags.sort) {
             intflags.sort = 0;
-
             pwm_copy(p[pdi % 2], bitmap[pdi], ROWS);
-
-            ticks += 2;
-            if (ticks == 0) {
-                rot++;
-                // pwm_init(bitmap, rot);
-                for (i = 0; i < 4; i++) {
-                    for (j = 0; j < 8; j++) {
-                        bitmap[i][j] = rot % 4;
-                    }
+        }
+        while (bit_is_set(UCSRA, RXC) && !intflags.sort) {
+            c = UDR;
+            if (bxi < 0) {
+                if (c == 'u') { // 'update'
+                    printstr_p(PSTR("U"));
+                    bxi++;
+                    break;
                 }
+            } else if (bxi < (ROWS * COLUMNS)) {
+                buffer[bxi % ROWS] = c;
+                if((bxi % ROWS) == (ROWS-1)) {
+                    j = (bxi / ROWS);
+                    for(i=0; i<ROWS; i++) {
+                        bitmap[j][i] = buffer[i];
+                    }
+                    itoa(j, buffer, 10);
+                    printstr(buffer);
+                }
+                bxi++;
+            } else {
+                printstr_p(PSTR(" OK\n"));
+                bxi = -1;
             }
         }
-        set_sleep_mode(SLEEP_MODE_IDLE);
-        sleep_enable();
-        sleep_cpu();
     }
     return 0;
 }
