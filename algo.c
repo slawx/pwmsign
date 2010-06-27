@@ -74,18 +74,7 @@ void pwm_copy(pwm p[], uint8_t b[], uint8_t b_len) {
     }
     p[b_len].width = 0xff;
     p[b_len].pin = 0xff;
-    pwm_sort(p, b_len + 1);
+    pwm_sort(p, b_len);
     pwm_merge(p, b_len + 1);
 }
 
-/**
- * Sawtooth pattern. Doesn't have anything to do with pwm anymore.
- */
-void pwm_init(uint8_t bitmap[4][8], uint8_t rot) {
-    uint8_t i, j;
-    for (i = 0; i < 4; i++) {
-        for (j = 0; j < 8; j++) {
-            bitmap[i][j] = (1 << ((j + rot) % 8));
-        }
-    }
-}

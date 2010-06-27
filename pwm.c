@@ -26,12 +26,14 @@
 #include <avr/pgmspace.h>
 #include <util/delay.h>
 
+#include "synch.h"
 #include "algo.h"
 
 #define COLUMNS 4
 #define ROWS 8
 #define COLUMN_PORT PORTD
 #define COLUMN_DDR DDRD
+#define COLUMN_PIN0 PD2
 #define ROW_PORT PORTB
 #define ROW_DDR DDRB
 
@@ -48,7 +50,6 @@ uint8_t rotc;
 
 volatile struct {
     uint8_t sort :1; // need to refresh inactive buffer
-    uint8_t synch :1; // synch event
     uint8_t rxc :1; // received a character
 } intflags;
 
@@ -57,6 +58,8 @@ ISR(TIMER0_COMPA_vect)
     while (pp->width < TCNT0) {
         ROW_PORT = pp->pin;
         pp++;
+        // XXX to prevent glitches, max(TCNT0+1, pp->width) in case ISR was late? what if OVF is late?
+		// XXX try while (OCR0A < TCNT0) {}
         OCR0A = pp->width;
     }
 }
@@ -133,10 +136,12 @@ static void printstr_p(const char *s) {
     }
 }
 
+/*
 ISR(USART_RX_vect)
 {
     intflags.rxc = 1;
 }
+*/
 
 /**
  * Setup UART.
@@ -156,77 +161,20 @@ static void uart_38400(void) {
     UCSRB = (1 << TXEN) | (1 << RXEN);
 }
 
-// SYNCHRONIZATION.
-#define SYNCH_TARGET ((UBRR_VALUE + 1) * (16 >> USE_2X))
-#define TOO_HIGH (SYNCH_TARGET + (SYNCH_TARGET >> 2))
-#define TOO_LOW (SYNCH_TARGET - (SYNCH_TARGET >> 2))
-#define OSCCAL_MAX (0x7f)
-#define MAX(a, b) (a > b ? a : b)
-#define MIN(a, b) (a < b ? a : b)
-
-uint8_t ici_i;
-uint16_t ici[2];
 /**
- * Synchronize a relatively accurate OSCCAL to the USART.
- * (jumper the RXD & ICP pins).
- * No smart searching, just increase or decrease OSCCAL when a pulse
- * is reasonably close to the right length.
+ * naked main() saves some stack space by not saving register state,
+ * but we cannot return from main() or call main() recursively.
  */
-ISR(TIMER1_CAPT_vect)
-{
-    ici[ici_i] = ICR1L | (ICR1H << 8);
-    ici_i++;
-    ici_i %= 2;
-
-    if (TCCR1B & (1 << ICES1)) {
-        TCCR1B &= ~(1 << ICES1);
-    } else {
-        TCCR1B |= 1 << ICES1;
-    }
-
-    if (ici_i == 0) {
-        uint16_t delta = ici[(ici_i + 1) % 2] - ici[ici_i];
-        if (delta > SYNCH_TARGET && delta < TOO_HIGH) {
-            // too fast. decrease osccal.
-            OSCCAL = MAX(OSCCAL-1, 0);
-        } else if (delta < SYNCH_TARGET && delta > TOO_LOW) {
-            // too slow. increase osccal.
-            OSCCAL = MIN(OSCCAL+1, OSCCAL_MAX);
-        } else if (delta <= TOO_LOW || delta >= TOO_HIGH) {
-            // out of bounds
-        } else {
-            // perfect! disable input compare interrupt.
-            TIMSK &= ~(1 << ICIE1);
-        }
-    }
-    intflags.synch = 1;
-}
-
-/**
- * Set up the event capture unit for OSCCAL calibration.
- */
-static void synch_init() {
-    // set ICP pin as input, no internal pullup.
-    DDRD &= ~(1 << PD6); // ICP
-    PORTD &= ~(1 << PD6);
-    // ck / 1
-    TCCR1B = (1 << CS10);
-    // synch on falling edge
-    TCCR1B &= ~(1 << ICES1);
-    TIMSK |= 1 << ICIE1;
-}
-
-// END SYNCHRONIZATION
+int main(void) __attribute__((naked));
 
 int main(void) {
-    // uint8_t ticks = 0;
     uint8_t i, j;
 
     char c;
     int8_t bxi = -1;
     char buffer[ROWS];
 
-    OSCCAL = 101;
+    // OSCCAL = 101; // determined experimentally for /my/ ATtiny2313
 
     uart_38400();
 
@@ -238,42 +186,11 @@ int main(void) {
 
     // synch_init();
 
-    /*
-     while (TCCR1B & (1<<ICIE1)) {
-     if (intflags.rxc) {
-     if (bit_is_set(UCSRA, RXC)) {
-     while (bit_is_set(UCSRA, RXC)) {
-     putchr(UDR);
-     }
-     putchr('\r');
-     putchr('\n');
-     }
-     intflags.rxc = 0;
-     }
-     if (intflags.synch) {
-     uint16_t delta = ici[(ici_i + 1) % 2] - ici[ici_i];
-     // PORTB = OSCCAL;
-     itoa(delta, buffer, 10);
-     printstr(buffer);
-     putchr(' ');
-     itoa(OSCCAL, buffer, 10);
-     printstr(buffer);
-     putchr(' ');
-     itoa(SYNCH_TARGET, buffer, 10);
-     printstr(buffer);
-     putchr('\r');
-     putchr('\n');
-     intflags.synch = 0;
-     }
-     }
-     */
-
-    ROW_PORT = 0;
+    ROW_PORT = 0xff; // 1 == off
     ROW_DDR = 0xff;
     COLUMN_DDR = _BV(5) | _BV(4) | _BV(3) | _BV(2);
 
     TCCR0B = _BV(CS01) | _BV(CS00); // ck / 64
-    // TCCR0B = _BV(CS02); // ck / 256
     OCR0A = 0;
     TIMSK = _BV(TOIE0) | _BV(OCIE0A); // enable overflow and compare interrupts
 
@@ -288,7 +205,7 @@ int main(void) {
             c = UDR;
             if (bxi < 0) {
                 if (c == 'u') { // 'update'
-                    printstr_p(PSTR("U"));
+                    printstr_p(PSTR("u"));
                     bxi++;
                     break;
                 }
